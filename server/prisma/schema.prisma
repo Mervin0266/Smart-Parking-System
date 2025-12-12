@@ -1,0 +1,36 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Faculty {
+  Register_Number Int     @id @map("Register Number")
+  Name            String  @db.VarChar(50)
+  Email           String  @db.VarChar(100)
+  Phone_Number    String  @map("Phone Number") @db.VarChar(20)
+  Department      String? @db.VarChar(100)
+  License_Number  String? @map("License Number") @db.VarChar(30)
+  Category_       String? @map("Category ") @db.VarChar(15)
+}
+
+model Visitor {
+  Name         String  @db.VarChar(50)
+  Phone_Number String  @db.VarChar(20)
+  Email        String? @db.VarChar(100)
+  Purpose      String? @db.VarChar(255)
+
+  @@id([Phone_Number, Name])
+}
+
+model student {
+  Register_Number Int     @id @map("Register Number")
+  Name            String  @db.VarChar(50)
+  Email           String? @db.VarChar(255)
+  Phone_Number    String? @map("Phone Number") @db.VarChar(20)
+  Department      String? @db.VarChar(100)
+  License_Number  String? @map("License Number") @db.VarChar(25)
+}
