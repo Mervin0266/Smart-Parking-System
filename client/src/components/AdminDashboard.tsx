@@ -78,22 +78,88 @@ const AdminDashboard: React.FC = () => {
     "All"
   );
 
-  // Load vehicles from localStorage on initial render
-  useEffect(() => {
+  // Add this function near the top of the component, after state declarations
+  const fetchAllVehicles = async () => {
     try {
+      const [studentsRes, facultyRes, visitorsRes] = await Promise.all([
+        fetch("http://localhost:5000/api/students"),
+        fetch("http://localhost:5000/api/faculty"),
+        fetch("http://localhost:5000/api/visitors"),
+      ]);
+
+      const students = await studentsRes.json();
+      const faculty = await facultyRes.json();
+      const visitors = await visitorsRes.json();
+
+      // Transform database records to Vehicle format
+      const allVehicles: Vehicle[] = [
+        ...students.map((s: any) => ({
+          id: s.Register_Number,
+          ownerName: s.Name,
+          ownerEmail: s.Email || "",
+          ownerPhone: s.Phone_Number || "",
+          licenseNumber: s.License_Number || "",
+          ownerType: "student",
+          registerNumber: s.Register_Number.toString(),
+          department: s.Department || "",
+          vehicleNumber: s.License_Number || "N/A",
+          vehicleModel: "N/A",
+          vehicleColor: "N/A",
+          vehicleType: "Car",
+          entryTime: new Date().toISOString(),
+          exitTime: null,
+          status: "Inside" as const,
+        })),
+        ...faculty.map((f: any) => ({
+          id: f.Register_Number,
+          ownerName: f.Name,
+          ownerEmail: f.Email,
+          ownerPhone: f.Phone_Number,
+          licenseNumber: f.License_Number || "",
+          ownerType: "faculty",
+          employeeId: f.Register_Number.toString(),
+          department: f.Department || "",
+          vehicleNumber: f.License_Number || "N/A",
+          vehicleModel: "N/A",
+          vehicleColor: "N/A",
+          vehicleType: f.Category_ || "Car",
+          entryTime: new Date().toISOString(),
+          exitTime: null,
+          status: "Inside" as const,
+        })),
+        ...visitors.map((v: any) => ({
+          id: Date.now() + Math.random(),
+          ownerName: v.Name,
+          ownerEmail: v.Email || "",
+          ownerPhone: v.Phone_Number,
+          licenseNumber: "",
+          ownerType: "visitor",
+          purpose: v.Purpose || "",
+          vehicleNumber: "Visitor",
+          vehicleModel: "N/A",
+          vehicleColor: "N/A",
+          vehicleType: "Car",
+          entryTime: new Date().toISOString(),
+          exitTime: null,
+          status: "Inside" as const,
+        })),
+      ];
+
+      setVehicles(allVehicles);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(allVehicles));
+    } catch (error) {
+      console.error("Failed to fetch vehicles from database:", error);
+      // Fallback to localStorage
       const storedVehicles = localStorage.getItem(STORAGE_KEY);
       if (storedVehicles) {
-        setVehicles(JSON.parse(storedVehicles) as Vehicle[]);
-      } else {
-        const initialVehicles: Vehicle[] = [];
-        setVehicles(initialVehicles);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(initialVehicles));
+        setVehicles(JSON.parse(storedVehicles));
       }
-    } catch (error) {
-      console.error("Failed to parse vehicles from localStorage", error);
-      setVehicles([]);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
     }
+  };
+
+  // Replace the existing useEffect with this:
+  useEffect(() => {
+    fetchAllVehicles();
   }, []);
 
   // Effect for the live clock
@@ -104,7 +170,10 @@ const AdminDashboard: React.FC = () => {
 
   // Handlers
   const handleBack = () => navigate("/admin-login");
-  const handleRefresh = () => window.location.reload();
+  const handleRefresh = () => {
+    fetchAllVehicles();
+    showSnackbar("Data refreshed from database");
+  };
   const openCamModal = () => setCamOpen(true);
   const closeCamModal = () => setCamOpen(false);
   const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
@@ -228,31 +297,30 @@ const AdminDashboard: React.FC = () => {
       if (formData.ownerType === "student") {
         apiEndpoint = "http://localhost:5000/api/students";
         requestBody = {
-          Register_Number: parseInt(formData.registerNumber),
-          Name: formData.ownerName,
-          Email: formData.ownerEmail.toLowerCase(),
-          Phone_Number: formData.ownerPhone,
-          Department: formData.department,
-          License_Number: formData.licenseNumber,
+          register_number: parseInt(formData.registerNumber),
+          name: formData.ownerName,
+          email: formData.ownerEmail.toLowerCase(),
+          phone: formData.ownerPhone,
+          department: formData.department,
+          license_number: formData.licenseNumber,
         };
       } else if (formData.ownerType === "faculty") {
         apiEndpoint = "http://localhost:5000/api/faculty";
         requestBody = {
-          Register_Number: parseInt(formData.employeeId),
-          Name: formData.ownerName,
-          Email: formData.ownerEmail.toLowerCase(),
-          Phone_Number: formData.ownerPhone,
-          Department: formData.department,
-          License_Number: formData.licenseNumber,
-          Category_: formData.vehicleType, // Map vehicle type to category
+          faculty_id: parseInt(formData.employeeId),
+          name: formData.ownerName,
+          email: formData.ownerEmail.toLowerCase(),
+          phone: formData.ownerPhone,
+          department: formData.department,
+          license_number: formData.licenseNumber,
         };
       } else if (formData.ownerType === "visitor") {
         apiEndpoint = "http://localhost:5000/api/visitors";
         requestBody = {
-          Name: formData.ownerName,
-          Phone_Number: formData.ownerPhone,
-          Email: formData.ownerEmail.toLowerCase(),
-          Purpose: formData.purpose,
+          name: formData.ownerName,
+          phone: formData.ownerPhone,
+          purpose: formData.purpose,
+          vehicle_number: formData.vehicleNumber.toUpperCase(),
         };
       }
 
