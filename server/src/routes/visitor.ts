@@ -16,11 +16,11 @@ router.get("/", async (req, res) => {
 
 // Add new visitor
 router.post("/", async (req, res) => {
-  const { Name, Phone_Number, Email, Purpose } = req.body;
+  const { name, phone, purpose, vehicle_number, id_proof } = req.body;
 
   try {
     const visitor = await prisma.visitor.create({
-      data: { Name, Phone_Number, Email, Purpose },
+      data: { name, phone, purpose, vehicle_number, id_proof },
     });
     res.json({ message: "Visitor added successfully", visitor });
   } catch (error) {
@@ -28,15 +28,12 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Delete visitor
-router.delete("/:phoneNumber/:name", async (req, res) => {
+// Delete visitor by vehicle_number (unique field)
+router.delete("/:vehicleNumber", async (req, res) => {
   try {
     await prisma.visitor.delete({
       where: {
-        Phone_Number_Name: {
-          Phone_Number: req.params.phoneNumber,
-          Name: req.params.name,
-        },
+        vehicle_number: req.params.vehicleNumber,
       },
     });
     res.json({ message: "Visitor deleted successfully" });
