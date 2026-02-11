@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import christLogo from "../assets/ChristLogo.png";
 import Snackbar, { type SnackbarCloseReason } from "@mui/material/Snackbar";
@@ -7,96 +7,211 @@ import IconButton from "@mui/material/IconButton";
 import CloseIcon from "@mui/icons-material/Close";
 import MenuIcon from "@mui/icons-material/Menu";
 
-// Define the structure of a vehicle object
-interface Vehicle {
-  id: number;
-  ownerName: string;
-  ownerEmail: string;
-  ownerPhone: string;
-  licenseNumber?: string; // Added licenseNumber
-  ownerType: string;
-  // Specific fields (optional based on type)
-  registerNumber?: string;
-  department?: string;
-  employeeId?: string;
-  purpose?: string;
+const API_BASE = "http://localhost:5000/api";
 
-  vehicleNumber: string;
-  vehicleModel: string;
-  vehicleColor: string;
-  vehicleType: string;
-  entryTime: string;
-  exitTime: string | null;
-  status: "Inside" | "Exited";
+// Types matching database schema
+interface Vehicle {
+  vehicle_id: number;
+  number_plate: string;
+  vehicle_type: string;
+  owner_type: string;
+  owner_id: number | null;
+  parking_payment?: ParkingPayment;
+  slot_assignment?: SlotAssignment;
 }
 
-const STORAGE_KEY = "christ_admin_vehicles";
+interface ParkingSlot {
+  slot_id: number;
+  slot_name: string;
+  slot_type: string;
+  is_occupied: boolean;
+}
+
+interface SlotAssignment {
+  assignment_id: number;
+  vehicle_id: number;
+  slot_id: number;
+  parking_slot?: ParkingSlot;
+  vehicle?: Vehicle;
+}
+
+interface ParkingPayment {
+  payment_id: number;
+  vehicle_id: number;
+  amount: number | null;
+  start_date: string;
+  end_date: string;
+  status: string;
+}
+
+interface ParkingLog {
+  log_id: number;
+  vehicle_id: number;
+  slot_id: number;
+  entry_time: string;
+  exit_time: string | null;
+  notes: string | null;
+  vehicle?: Vehicle;
+  parking_slot?: ParkingSlot;
+}
+
+interface DashboardStats {
+  totalSlots: number;
+  occupiedSlots: number;
+  availableSlots: number;
+  totalVehicles: number;
+  activePayments: number;
+  todayEntries: number;
+  activeParking: number;
+}
+
+interface Student {
+  register_number: number;
+  name: string;
+  email: string;
+  phone: string;
+  department: string;
+  license_number: string;
+}
+
+interface Faculty {
+  faculty_id: number;
+  name: string;
+  email: string;
+  phone: string;
+  department: string;
+  license_number: string;
+}
+
+interface Visitor {
+  vehicle_number: string;
+  name: string;
+  phone: string;
+  purpose: string;
+  id_proof: string;
+  created_at: string;
+}
 
 const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [activeSection, setActiveSection] = useState<
-    "vehicles" | "add" | "remove" | "today"
-  >("vehicles");
-  const [camOpen, setCamOpen] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Form Step State (1 = Owner Details, 2 = Specific & Vehicle Details)
-  const [formStep, setFormStep] = useState(1);
+  // Data states
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [parkingLogs, setParkingLogs] = useState<ParkingLog[]>([]);
+  const [activeParkings, setActiveParkings] = useState<ParkingLog[]>([]);
+  const [slots, setSlots] = useState<ParkingSlot[]>([]);
+  const [payments, setPayments] = useState<ParkingPayment[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [faculty, setFaculty] = useState<Faculty[]>([]);
+  const [visitors, setVisitors] = useState<Visitor[]>([]);
+
+  // UI states
+  const [activeSection, setActiveSection] = useState<
+    | "dashboard"
+    | "vehicles"
+    | "slots"
+    | "payments"
+    | "logs"
+    | "entry"
+    | "exit"
+    | "people"
+  >("dashboard");
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [modalType, setModalType] = useState<
+    "vehicle" | "slot" | "payment" | "entry"
+  >("vehicle");
 
   // Snackbar State
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState("");
 
-  // State for add vehicle form
-  const [formData, setFormData] = useState({
-    ownerName: "",
-    ownerEmail: "",
-    ownerPhone: "",
-    licenseNumber: "", // Added to state
-    ownerType: "", // Default empty to force selection
-
-    // Specific fields
-    registerNumber: "",
+  // Form states
+  const [vehicleForm, setVehicleForm] = useState({
+    number_plate: "",
+    vehicle_type: "car",
+    owner_type: "student",
+    owner_id: "",
+    name: "",
+    email: "",
+    phone: "",
     department: "",
-    employeeId: "",
-    purpose: "",
-
-    vehicleNumber: "",
-    vehicleModel: "",
-    vehicleColor: "",
-    vehicleType: "Car",
+    license_number: "",
+    register_number: "", // for students
+    faculty_id: "", // for faculty
+    purpose: "", // for visitors
+    id_proof: "", // for visitors
   });
 
-  const [removePlate, setRemovePlate] = useState("");
+  const [slotForm, setSlotForm] = useState({
+    slot_name: "",
+    slot_type: "PAID",
+  });
 
-  // State for search and filter
+  const [paymentForm, setPaymentForm] = useState({
+    vehicle_id: "",
+    amount: "",
+    start_date: "",
+    end_date: "",
+  });
+
+  const [entryForm, setEntryForm] = useState({
+    number_plate: "",
+    slot_id: "",
+    notes: "",
+  });
+
+  const [exitPlate, setExitPlate] = useState("");
+
+  // Search state
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"All" | "Inside" | "Exited">(
-    "All"
-  );
 
-  // Load vehicles from localStorage on initial render
-  useEffect(() => {
+  // Fetch all data
+  const fetchAllData = useCallback(async () => {
     try {
-      const storedVehicles = localStorage.getItem(STORAGE_KEY);
-      if (storedVehicles) {
-        setVehicles(JSON.parse(storedVehicles) as Vehicle[]);
-      } else {
-        const initialVehicles: Vehicle[] = [];
-        setVehicles(initialVehicles);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(initialVehicles));
-      }
-    } catch (error) {
-      console.error("Failed to parse vehicles from localStorage", error);
-      setVehicles([]);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+      const [
+        statsRes,
+        vehiclesRes,
+        logsRes,
+        activeRes,
+        slotsRes,
+        paymentsRes,
+        studentsRes,
+        facultyRes,
+        visitorsRes,
+      ] = await Promise.all([
+        fetch(`${API_BASE}/dashboard/stats`),
+        fetch(`${API_BASE}/vehicles`),
+        fetch(`${API_BASE}/logs/today`),
+        fetch(`${API_BASE}/logs/active`),
+        fetch(`${API_BASE}/slots`),
+        fetch(`${API_BASE}/payments`),
+        fetch(`${API_BASE}/students`),
+        fetch(`${API_BASE}/faculty`),
+        fetch(`${API_BASE}/visitors`),
+      ]);
+
+      setStats(await statsRes.json());
+      setVehicles(await vehiclesRes.json());
+      setParkingLogs(await logsRes.json());
+      setActiveParkings(await activeRes.json());
+      setSlots(await slotsRes.json());
+      setPayments(await paymentsRes.json());
+      setStudents(await studentsRes.json());
+      setFaculty(await facultyRes.json());
+      setVisitors(await visitorsRes.json());
+    } catch {
+      console.error("Failed to fetch data");
+      showSnackbar("Failed to fetch data from server");
     }
   }, []);
 
-  // Effect for the live clock
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -104,19 +219,18 @@ const AdminDashboard: React.FC = () => {
 
   // Handlers
   const handleBack = () => navigate("/admin-login");
-  const handleRefresh = () => window.location.reload();
-  const openCamModal = () => setCamOpen(true);
-  const closeCamModal = () => setCamOpen(false);
+  const handleRefresh = () => {
+    fetchAllData();
+    showSnackbar("Data refreshed");
+  };
   const handleDrawerToggle = () => setMobileOpen(!mobileOpen);
 
-  // Snackbar Handlers
+  // Snackbar
   const handleCloseSnackbar = (
     _event: React.SyntheticEvent | Event,
     reason?: SnackbarCloseReason
   ) => {
-    if (reason === "clickaway") {
-      return;
-    }
+    if (reason === "clickaway") return;
     setSnackbarOpen(false);
   };
 
@@ -125,512 +239,846 @@ const AdminDashboard: React.FC = () => {
     setSnackbarOpen(true);
   };
 
-  const snackbarAction = (
-    <React.Fragment>
-      <IconButton
-        size="small"
-        aria-label="close"
-        color="inherit"
-        onClick={handleCloseSnackbar}
-      >
-        <CloseIcon fontSize="small" />
-      </IconButton>
-    </React.Fragment>
-  );
-
-  const handleInputChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-  ) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
-  };
-
-  // Form Navigation Handlers
-  const handleNextStep = () => {
-    // Validate Step 1
-    if (
-      !formData.ownerName ||
-      !formData.ownerEmail ||
-      !formData.ownerPhone ||
-      !formData.ownerType
-    ) {
-      showSnackbar("Please fill in all owner details and select a type.");
-      return;
-    }
-    setFormStep(2);
-  };
-
-  const handlePrevStep = () => {
-    setFormStep(1);
-  };
-
+  // Vehicle handlers
   const handleAddVehicle = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // Validate Specific Fields based on Owner Type
-    if (formData.ownerType === "student") {
-      if (
-        !formData.registerNumber ||
-        !formData.department ||
-        !formData.licenseNumber
-      ) {
-        showSnackbar(
-          "Please fill in Register Number, License Number, and Department."
-        );
-        return;
-      }
-    } else if (formData.ownerType === "faculty") {
-      if (
-        !formData.employeeId ||
-        !formData.department ||
-        !formData.licenseNumber
-      ) {
-        showSnackbar(
-          "Please fill in Employee ID, License Number, and Department."
-        );
-        return;
-      }
-    } else if (formData.ownerType === "visitor") {
-      if (!formData.purpose) {
-        showSnackbar("Please specify the Purpose of Visit.");
-        return;
-      }
-    }
-
-    // Validate Vehicle Details
-    if (
-      !formData.vehicleNumber ||
-      !formData.vehicleModel ||
-      !formData.vehicleColor
-    ) {
-      showSnackbar("Please fill in all vehicle details.");
-      return;
-    }
-
-    // Check if vehicle number already exists
-    if (
-      vehicles.some(
-        (v) =>
-          v.vehicleNumber.toLowerCase() === formData.vehicleNumber.toLowerCase()
-      )
-    ) {
-      showSnackbar("A vehicle with this number is already registered.");
-      return;
-    }
-
     try {
-      // Determine which API endpoint to call based on ownerType
-      let apiEndpoint = "";
-      let requestBody: any = {};
-
-      if (formData.ownerType === "student") {
-        apiEndpoint = "http://localhost:5000/api/students";
-        requestBody = {
-          Register_Number: parseInt(formData.registerNumber),
-          Name: formData.ownerName,
-          Email: formData.ownerEmail.toLowerCase(),
-          Phone_Number: formData.ownerPhone,
-          Department: formData.department,
-          License_Number: formData.licenseNumber,
-        };
-      } else if (formData.ownerType === "faculty") {
-        apiEndpoint = "http://localhost:5000/api/faculty";
-        requestBody = {
-          Register_Number: parseInt(formData.employeeId),
-          Name: formData.ownerName,
-          Email: formData.ownerEmail.toLowerCase(),
-          Phone_Number: formData.ownerPhone,
-          Department: formData.department,
-          License_Number: formData.licenseNumber,
-          Category_: formData.vehicleType, // Map vehicle type to category
-        };
-      } else if (formData.ownerType === "visitor") {
-        apiEndpoint = "http://localhost:5000/api/visitors";
-        requestBody = {
-          Name: formData.ownerName,
-          Phone_Number: formData.ownerPhone,
-          Email: formData.ownerEmail.toLowerCase(),
-          Purpose: formData.purpose,
-        };
-      }
-
-      // Send data to backend
-      const response = await fetch(apiEndpoint, {
+      const response = await fetch(`${API_BASE}/vehicles`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          number_plate: vehicleForm.number_plate,
+          vehicle_type: vehicleForm.vehicle_type,
+          owner_type: vehicleForm.owner_type,
+          owner_id: vehicleForm.owner_id || null,
+          owner_details: {
+            name: vehicleForm.name,
+            email: vehicleForm.email,
+            phone: vehicleForm.phone,
+            department: vehicleForm.department,
+            license_number: vehicleForm.license_number,
+            register_number:
+              vehicleForm.owner_type === "student"
+                ? vehicleForm.register_number
+                : null,
+            faculty_id:
+              vehicleForm.owner_type === "faculty"
+                ? vehicleForm.faculty_id
+                : null,
+            purpose:
+              vehicleForm.owner_type === "visitor" ? vehicleForm.purpose : null,
+            id_proof:
+              vehicleForm.owner_type === "visitor"
+                ? vehicleForm.id_proof
+                : null,
+          },
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to add vehicle");
+
+      showSnackbar("Vehicle added successfully");
+      setShowAddModal(false);
+      setVehicleForm({
+        number_plate: "",
+        vehicle_type: "car",
+        owner_type: "student",
+        owner_id: "",
+        name: "",
+        email: "",
+        phone: "",
+        department: "",
+        license_number: "",
+        register_number: "",
+        faculty_id: "",
+        purpose: "",
+        id_proof: "",
+      });
+      fetchAllData();
+    } catch {
+      showSnackbar("Failed to add vehicle");
+    }
+  };
+
+  // Slot handlers
+  const handleAddSlot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const response = await fetch(`${API_BASE}/slots`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(slotForm),
+      });
+
+      if (!response.ok) throw new Error("Failed to add slot");
+
+      showSnackbar("Parking slot added successfully");
+      setShowAddModal(false);
+      setSlotForm({ slot_name: "", slot_type: "PAID" });
+      fetchAllData();
+    } catch {
+      showSnackbar("Failed to add parking slot");
+    }
+  };
+
+  // Payment handlers
+  const handleAddPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const response = await fetch(`${API_BASE}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(paymentForm),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to add to database");
+        const error = await response.json();
+        throw new Error(error.error);
       }
 
-      const result = await response.json();
-      console.log("Database response:", result);
+      showSnackbar("Payment created successfully");
+      setShowAddModal(false);
+      setPaymentForm({
+        vehicle_id: "",
+        amount: "",
+        start_date: "",
+        end_date: "",
+      });
+      fetchAllData();
+    } catch (error: any) {
+      showSnackbar(error.message || "Failed to create payment");
+    }
+  };
 
-      // Also keep in localStorage for UI
-      const newVehicle: Vehicle = {
-        id: Date.now(),
-        ownerName: formData.ownerName,
-        ownerEmail: formData.ownerEmail.toLowerCase(),
-        ownerPhone: formData.ownerPhone,
-        licenseNumber: formData.licenseNumber,
-        ownerType: formData.ownerType,
+  // Entry handler
+  const handleVehicleEntry = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      // First get vehicle by plate
+      const vehicleRes = await fetch(
+        `${API_BASE}/vehicles/plate/${entryForm.number_plate}`
+      );
+      if (!vehicleRes.ok) throw new Error("Vehicle not found");
+      const vehicle = await vehicleRes.json();
 
-        ...(formData.ownerType === "student" && {
-          registerNumber: formData.registerNumber,
-          department: formData.department,
+      if (!vehicle) throw new Error("Vehicle not found");
+
+      const response = await fetch(`${API_BASE}/logs/entry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vehicle_id: vehicle.vehicle_id,
+          slot_id: parseInt(entryForm.slot_id),
+          notes: entryForm.notes,
         }),
-        ...(formData.ownerType === "faculty" && {
-          employeeId: formData.employeeId,
-          department: formData.department,
-        }),
-        ...(formData.ownerType === "visitor" && {
-          purpose: formData.purpose,
-        }),
-
-        vehicleNumber: formData.vehicleNumber.toUpperCase(),
-        vehicleModel: formData.vehicleModel,
-        vehicleColor: formData.vehicleColor,
-        vehicleType: formData.vehicleType,
-        entryTime: new Date().toISOString(),
-        exitTime: null,
-        status: "Inside",
-      };
-
-      const updatedVehicles = [...vehicles, newVehicle];
-      setVehicles(updatedVehicles);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedVehicles));
-
-      // Reset form
-      setFormData({
-        ownerName: "",
-        ownerEmail: "",
-        ownerPhone: "",
-        licenseNumber: "",
-        ownerType: "",
-        registerNumber: "",
-        department: "",
-        employeeId: "",
-        purpose: "",
-        vehicleNumber: "",
-        vehicleModel: "",
-        vehicleColor: "",
-        vehicleType: "Car",
       });
 
-      setFormStep(1);
-      setShowAddModal(false);
-      showSnackbar("Vehicle added successfully to database!");
-      setActiveSection("vehicles");
-    } catch (error) {
-      console.error("Error adding vehicle:", error);
-      showSnackbar("Failed to add vehicle to database. Please try again.");
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error);
+      }
+
+      showSnackbar("Vehicle entry recorded successfully");
+      setEntryForm({ number_plate: "", slot_id: "", notes: "" });
+      fetchAllData();
+    } catch (error: any) {
+      showSnackbar(error.message || "Failed to record entry");
     }
   };
 
-  const handleRemoveVehicle = (e: React.FormEvent) => {
+  // Exit handler
+  const handleVehicleExit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const vehicleToRemove = vehicles.find(
-      (v) =>
-        v.vehicleNumber === removePlate.toUpperCase() && v.status === "Inside"
-    );
-    if (!vehicleToRemove) {
-      showSnackbar("Vehicle not found or has already exited.");
-      return;
+    try {
+      const response = await fetch(`${API_BASE}/logs/exit/plate/${exitPlate}`, {
+        method: "PATCH",
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error);
+      }
+
+      showSnackbar("Vehicle exit recorded successfully");
+      setExitPlate("");
+      fetchAllData();
+    } catch (error: any) {
+      showSnackbar(error.message || "Failed to record exit");
     }
-    const updatedVehicles = vehicles.map((v) =>
-      v.id === vehicleToRemove.id
-        ? ({
-            ...v,
-            exitTime: new Date().toISOString(),
-            status: "Exited",
-          } as Vehicle)
-        : v
-    );
-    setVehicles(updatedVehicles);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedVehicles));
-    setRemovePlate("");
-    showSnackbar("Vehicle marked as exited.");
-    setActiveSection("vehicles");
   };
 
-  const handleMarkExit = (id: number) => {
-    const updatedVehicles = vehicles.map((v) =>
-      v.id === id
-        ? ({
-            ...v,
-            exitTime: new Date().toISOString(),
-            status: "Exited",
-          } as Vehicle)
-        : v
-    );
-    setVehicles(updatedVehicles);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedVehicles));
-    showSnackbar("Vehicle marked as exited.");
+  // Mark exit from log
+  const handleMarkExit = async (logId: number) => {
+    try {
+      const response = await fetch(`${API_BASE}/logs/exit/${logId}`, {
+        method: "PATCH",
+      });
+
+      if (!response.ok) throw new Error("Failed to record exit");
+
+      showSnackbar("Vehicle exit recorded");
+      fetchAllData();
+    } catch {
+      showSnackbar("Failed to record exit");
+    }
   };
 
-  // Filtering logic
-  const filteredVehicles = vehicles
-    .filter((v) => statusFilter === "All" || v.status === statusFilter)
-    .filter(
-      (v) =>
-        v.ownerName.toLowerCase().includes(search.toLowerCase()) ||
-        v.vehicleNumber.toLowerCase().includes(search.toLowerCase()) ||
-        v.vehicleModel?.toLowerCase().includes(search.toLowerCase())
-    );
+  // Update payment status
+  const handleUpdatePaymentStatus = async (
+    paymentId: number,
+    status: string
+  ) => {
+    try {
+      const response = await fetch(`${API_BASE}/payments/${paymentId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
 
-  const todayVehicles = vehicles.filter((v) => {
-    const entryDate = new Date(v.entryTime).toLocaleDateString();
-    const todayDate = new Date().toLocaleDateString();
-    return entryDate === todayDate;
-  });
+      if (!response.ok) throw new Error("Failed to update payment");
 
-  // KPI calculations
-  const totalSlots = 500;
-  const occupiedSlots = vehicles.filter((v) => v.status === "Inside").length;
-  const availableSlots = totalSlots - occupiedSlots;
-  const entriesToday = todayVehicles.length;
+      showSnackbar("Payment status updated");
+      fetchAllData();
+    } catch {
+      showSnackbar("Failed to update payment status");
+    }
+  };
+
+  // Filter vehicles by search
+  const filteredVehicles = vehicles.filter(
+    (v) =>
+      v.number_plate.toLowerCase().includes(search.toLowerCase()) ||
+      v.owner_type.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Get owner name
+  const getOwnerName = (vehicle: Vehicle) => {
+    if (vehicle.owner_type === "student") {
+      const student = students.find(
+        (s) => s.register_number === vehicle.owner_id
+      );
+      return student?.name || "Unknown";
+    } else if (vehicle.owner_type === "faculty") {
+      const fac = faculty.find((f) => f.faculty_id === vehicle.owner_id);
+      return fac?.name || "Unknown";
+    } else {
+      const visitor = visitors.find(
+        (v) => v.vehicle_number === vehicle.number_plate
+      );
+      return visitor?.name || "Visitor";
+    }
+  };
+
+  // Render sections
+  const renderDashboard = () => (
+    <div className="space-y-6">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Total Slots
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-slate-800">
+            {stats?.totalSlots || 0}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Occupied Slots
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-red-600">
+            {stats?.occupiedSlots || 0}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Available Slots
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-green-600">
+            {stats?.availableSlots || 0}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Today's Entries
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-slate-800">
+            {stats?.todayEntries || 0}
+          </p>
+        </div>
+      </div>
+
+      {/* Second row */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Total Vehicles
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-slate-800">
+            {stats?.totalVehicles || 0}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Active Payments
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-blue-600">
+            {stats?.activePayments || 0}
+          </p>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow-sm">
+          <h4 className="text-sm font-medium text-slate-500 uppercase">
+            Currently Parked
+          </h4>
+          <p className="mt-1 text-3xl font-semibold text-amber-600">
+            {stats?.activeParking || 0}
+          </p>
+        </div>
+      </div>
+
+      {/* Active Parkings */}
+      <div className="bg-white p-6 rounded-lg shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-700 mb-4">
+          Currently Parked Vehicles
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left text-slate-500">
+            <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+              <tr>
+                <th className="px-4 py-3">Vehicle</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Owner</th>
+                <th className="px-4 py-3">Slot</th>
+                <th className="px-4 py-3">Entry Time</th>
+                <th className="px-4 py-3">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeParkings.map((log) => (
+                <tr
+                  key={log.log_id}
+                  className="bg-white border-b hover:bg-slate-50"
+                >
+                  <td className="px-4 py-3 font-medium">
+                    {log.vehicle?.number_plate}
+                  </td>
+                  <td className="px-4 py-3 capitalize">
+                    {log.vehicle?.vehicle_type}
+                  </td>
+                  <td className="px-4 py-3 capitalize">
+                    {log.vehicle?.owner_type}
+                  </td>
+                  <td className="px-4 py-3">{log.parking_slot?.slot_name}</td>
+                  <td className="px-4 py-3">
+                    {new Date(log.entry_time).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => handleMarkExit(log.log_id)}
+                      className="text-indigo-600 hover:underline"
+                    >
+                      Mark Exit
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {activeParkings.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-4 py-8 text-center text-slate-400"
+                  >
+                    No vehicles currently parked
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderVehicles = () => (
+    <div className="bg-white p-6 rounded-lg shadow-sm">
+      <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
+        <h3 className="text-lg font-semibold text-slate-700">All Vehicles</h3>
+        <div className="flex gap-3">
+          <input
+            type="text"
+            placeholder="Search vehicles..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="px-3 py-2 border border-slate-300 rounded-md"
+          />
+          <button
+            onClick={() => {
+              setModalType("vehicle");
+              setShowAddModal(true);
+            }}
+            className="bg-[#0A4C87] text-white px-4 py-2 rounded-md hover:bg-[#083a5e]"
+          >
+            + Add Vehicle
+          </button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left text-slate-500">
+          <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+            <tr>
+              <th className="px-4 py-3">ID</th>
+              <th className="px-4 py-3">Number Plate</th>
+              <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3">Owner Type</th>
+              <th className="px-4 py-3">Owner Name</th>
+              <th className="px-4 py-3">Payment Status</th>
+              <th className="px-4 py-3">Assigned Slot</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredVehicles.map((v) => (
+              <tr
+                key={v.vehicle_id}
+                className="bg-white border-b hover:bg-slate-50"
+              >
+                <td className="px-4 py-3">{v.vehicle_id}</td>
+                <td className="px-4 py-3 font-medium">{v.number_plate}</td>
+                <td className="px-4 py-3 capitalize">{v.vehicle_type}</td>
+                <td className="px-4 py-3 capitalize">{v.owner_type}</td>
+                <td className="px-4 py-3">{getOwnerName(v)}</td>
+                <td className="px-4 py-3">
+                  {v.owner_type === "visitor" ? (
+                    <span className="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
+                      N/A
+                    </span>
+                  ) : v.parking_payment ? (
+                    <span
+                      className={`px-2 py-1 rounded-full text-xs ${
+                        v.parking_payment.status === "active"
+                          ? "bg-green-100 text-green-800"
+                          : v.parking_payment.status === "expired"
+                          ? "bg-red-100 text-red-800"
+                          : "bg-yellow-100 text-yellow-800"
+                      }`}
+                    >
+                      {v.parking_payment.status}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-1 rounded-full text-xs bg-red-100 text-red-800">
+                      No Payment
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {v.slot_assignment?.parking_slot?.slot_name || "Not Assigned"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const renderSlots = () => (
+    <div className="bg-white p-6 rounded-lg shadow-sm">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-slate-700">Parking Slots</h3>
+        <button
+          onClick={() => {
+            setModalType("slot");
+            setShowAddModal(true);
+          }}
+          className="bg-[#0A4C87] text-white px-4 py-2 rounded-md hover:bg-[#083a5e]"
+        >
+          + Add Slot
+        </button>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3">
+        {slots.map((slot) => (
+          <div
+            key={slot.slot_id}
+            className={`p-3 rounded-lg text-center border-2 ${
+              slot.is_occupied
+                ? "bg-red-50 border-red-300"
+                : "bg-green-50 border-green-300"
+            }`}
+          >
+            <div className="font-semibold text-slate-700">{slot.slot_name}</div>
+            <div
+              className={`text-xs ${
+                slot.slot_type === "PAID" ? "text-blue-600" : "text-purple-600"
+              }`}
+            >
+              {slot.slot_type}
+            </div>
+            <div
+              className={`text-xs mt-1 ${
+                slot.is_occupied ? "text-red-600" : "text-green-600"
+              }`}
+            >
+              {slot.is_occupied ? "Occupied" : "Available"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderPayments = () => (
+    <div className="bg-white p-6 rounded-lg shadow-sm">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-slate-700">
+          Parking Payments
+        </h3>
+        <button
+          onClick={() => {
+            setModalType("payment");
+            setShowAddModal(true);
+          }}
+          className="bg-[#0A4C87] text-white px-4 py-2 rounded-md hover:bg-[#083a5e]"
+        >
+          + Add Payment
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left text-slate-500">
+          <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+            <tr>
+              <th className="px-4 py-3">ID</th>
+              <th className="px-4 py-3">Vehicle</th>
+              <th className="px-4 py-3">Amount</th>
+              <th className="px-4 py-3">Start Date</th>
+              <th className="px-4 py-3">End Date</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments.map((p) => (
+              <tr
+                key={p.payment_id}
+                className="bg-white border-b hover:bg-slate-50"
+              >
+                <td className="px-4 py-3">{p.payment_id}</td>
+                <td className="px-4 py-3">
+                  {vehicles.find((v) => v.vehicle_id === p.vehicle_id)
+                    ?.number_plate || p.vehicle_id}
+                </td>
+                <td className="px-4 py-3">₹{p.amount || 0}</td>
+                <td className="px-4 py-3">
+                  {new Date(p.start_date).toLocaleDateString()}
+                </td>
+                <td className="px-4 py-3">
+                  {new Date(p.end_date).toLocaleDateString()}
+                </td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`px-2 py-1 rounded-full text-xs ${
+                      p.status === "active"
+                        ? "bg-green-100 text-green-800"
+                        : p.status === "expired"
+                        ? "bg-red-100 text-red-800"
+                        : "bg-yellow-100 text-yellow-800"
+                    }`}
+                  >
+                    {p.status}
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <select
+                    value={p.status}
+                    onChange={(e) =>
+                      handleUpdatePaymentStatus(p.payment_id, e.target.value)
+                    }
+                    className="text-xs border rounded px-2 py-1"
+                  >
+                    <option value="active">Active</option>
+                    <option value="expired">Expired</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const renderLogs = () => (
+    <div className="bg-white p-6 rounded-lg shadow-sm">
+      <h3 className="text-lg font-semibold text-slate-700 mb-4">
+        Today's Parking Logs
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm text-left text-slate-500">
+          <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+            <tr>
+              <th className="px-4 py-3">Log ID</th>
+              <th className="px-4 py-3">Vehicle</th>
+              <th className="px-4 py-3">Slot</th>
+              <th className="px-4 py-3">Entry Time</th>
+              <th className="px-4 py-3">Exit Time</th>
+              <th className="px-4 py-3">Notes</th>
+              <th className="px-4 py-3">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {parkingLogs.map((log) => (
+              <tr
+                key={log.log_id}
+                className="bg-white border-b hover:bg-slate-50"
+              >
+                <td className="px-4 py-3">{log.log_id}</td>
+                <td className="px-4 py-3">{log.vehicle?.number_plate}</td>
+                <td className="px-4 py-3">{log.parking_slot?.slot_name}</td>
+                <td className="px-4 py-3">
+                  {new Date(log.entry_time).toLocaleString()}
+                </td>
+                <td className="px-4 py-3">
+                  {log.exit_time
+                    ? new Date(log.exit_time).toLocaleString()
+                    : "-"}
+                </td>
+                <td className="px-4 py-3">{log.notes || "-"}</td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`px-2 py-1 rounded-full text-xs ${
+                      log.exit_time
+                        ? "bg-gray-100 text-gray-600"
+                        : "bg-green-100 text-green-800"
+                    }`}
+                  >
+                    {log.exit_time ? "Exited" : "Parked"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const renderEntry = () => (
+    <div className="bg-white p-6 rounded-lg shadow-sm max-w-xl mx-auto">
+      <h3 className="text-lg font-semibold text-slate-700 mb-4">
+        Vehicle Entry
+      </h3>
+      <form onSubmit={handleVehicleEntry} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Vehicle Number
+          </label>
+          <input
+            type="text"
+            value={entryForm.number_plate}
+            onChange={(e) =>
+              setEntryForm({
+                ...entryForm,
+                number_plate: e.target.value.toUpperCase(),
+              })
+            }
+            placeholder="e.g., KA01AB1234"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md"
+            required
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Select Slot
+          </label>
+          <select
+            value={entryForm.slot_id}
+            onChange={(e) =>
+              setEntryForm({ ...entryForm, slot_id: e.target.value })
+            }
+            className="w-full px-3 py-2 border border-slate-300 rounded-md"
+            required
+          >
+            <option value="">Select a slot</option>
+            {slots
+              .filter((s) => !s.is_occupied)
+              .map((slot) => (
+                <option key={slot.slot_id} value={slot.slot_id}>
+                  {slot.slot_name} ({slot.slot_type})
+                </option>
+              ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Notes (Optional)
+          </label>
+          <input
+            type="text"
+            value={entryForm.notes}
+            onChange={(e) =>
+              setEntryForm({ ...entryForm, notes: e.target.value })
+            }
+            placeholder="Any notes..."
+            className="w-full px-3 py-2 border border-slate-300 rounded-md"
+          />
+        </div>
+        <button
+          type="submit"
+          className="w-full bg-green-600 text-white py-2.5 rounded-md hover:bg-green-700"
+        >
+          Record Entry
+        </button>
+      </form>
+    </div>
+  );
+
+  const renderExit = () => (
+    <div className="bg-white p-6 rounded-lg shadow-sm max-w-xl mx-auto">
+      <h3 className="text-lg font-semibold text-slate-700 mb-4">
+        Vehicle Exit
+      </h3>
+      <form onSubmit={handleVehicleExit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-700 mb-1">
+            Vehicle Number
+          </label>
+          <input
+            type="text"
+            value={exitPlate}
+            onChange={(e) => setExitPlate(e.target.value.toUpperCase())}
+            placeholder="e.g., KA01AB1234"
+            className="w-full px-3 py-2 border border-slate-300 rounded-md"
+            required
+          />
+        </div>
+        <button
+          type="submit"
+          className="w-full bg-red-600 text-white py-2.5 rounded-md hover:bg-red-700"
+        >
+          Record Exit
+        </button>
+      </form>
+    </div>
+  );
+
+  const renderPeople = () => (
+    <div className="space-y-6">
+      {/* Students */}
+      <div className="bg-white p-6 rounded-lg shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-700 mb-4">
+          Students ({students.length})
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left text-slate-500">
+            <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+              <tr>
+                <th className="px-4 py-3">Reg No.</th>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Email</th>
+                <th className="px-4 py-3">Phone</th>
+                <th className="px-4 py-3">Department</th>
+              </tr>
+            </thead>
+            <tbody>
+              {students.map((s) => (
+                <tr key={s.register_number} className="bg-white border-b">
+                  <td className="px-4 py-3">{s.register_number}</td>
+                  <td className="px-4 py-3">{s.name}</td>
+                  <td className="px-4 py-3">{s.email}</td>
+                  <td className="px-4 py-3">{s.phone}</td>
+                  <td className="px-4 py-3">{s.department}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Faculty */}
+      <div className="bg-white p-6 rounded-lg shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-700 mb-4">
+          Faculty ({faculty.length})
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left text-slate-500">
+            <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+              <tr>
+                <th className="px-4 py-3">Faculty ID</th>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Email</th>
+                <th className="px-4 py-3">Phone</th>
+                <th className="px-4 py-3">Department</th>
+              </tr>
+            </thead>
+            <tbody>
+              {faculty.map((f) => (
+                <tr key={f.faculty_id} className="bg-white border-b">
+                  <td className="px-4 py-3">{f.faculty_id}</td>
+                  <td className="px-4 py-3">{f.name}</td>
+                  <td className="px-4 py-3">{f.email}</td>
+                  <td className="px-4 py-3">{f.phone}</td>
+                  <td className="px-4 py-3">{f.department}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Visitors */}
+      <div className="bg-white p-6 rounded-lg shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-700 mb-4">
+          Visitors ({visitors.length})
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left text-slate-500">
+            <thead className="text-xs text-slate-700 uppercase bg-slate-100">
+              <tr>
+                <th className="px-4 py-3">Vehicle No.</th>
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Phone</th>
+                <th className="px-4 py-3">Purpose</th>
+                <th className="px-4 py-3">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visitors.map((v) => (
+                <tr key={v.vehicle_number} className="bg-white border-b">
+                  <td className="px-4 py-3">{v.vehicle_number}</td>
+                  <td className="px-4 py-3">{v.name}</td>
+                  <td className="px-4 py-3">{v.phone}</td>
+                  <td className="px-4 py-3">{v.purpose}</td>
+                  <td className="px-4 py-3">
+                    {new Date(v.created_at).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 
   const renderSection = () => {
     switch (activeSection) {
-      case "add":
-        return (
-          <div className="bg-white p-6 rounded-lg shadow-sm">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xl font-semibold text-slate-700">
-                Add New Vehicle
-              </h3>
-              <button
-                onClick={() => {
-                  setFormStep(1);
-                  setShowAddModal(true);
-                }}
-                className="bg-[#0A4C87] text-white px-6 py-2.5 rounded-md hover:bg-[#083a5e] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0A4C87] font-semibold"
-              >
-                + Add Vehicle
-              </button>
-            </div>
-            <p className="text-slate-600">
-              Click the "Add Vehicle" button to register a new vehicle with
-              complete owner and vehicle details.
-            </p>
-          </div>
-        );
-      case "remove":
-        return (
-          <div className="bg-white p-6 rounded-lg shadow-sm">
-            <h3 className="text-xl font-semibold text-slate-700 mb-4">
-              Mark Vehicle as Exited
-            </h3>
-            <form onSubmit={handleRemoveVehicle}>
-              <div className="mb-4">
-                <label
-                  htmlFor="removeVehicleNumber"
-                  className="block text-sm font-medium text-slate-600 mb-1"
-                >
-                  Vehicle Number
-                </label>
-                <input
-                  type="text"
-                  id="removeVehicleNumber"
-                  value={removePlate}
-                  onChange={(e) => setRemovePlate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full bg-[#0A4C87] text-white py-2 px-4 rounded-md hover:bg-[#083a5e] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#0A4C87]"
-              >
-                Mark Exit
-              </button>
-            </form>
-          </div>
-        );
-      case "today":
-        return (
-          <div className="bg-white p-6 rounded-lg shadow-sm">
-            <h3 className="text-xl font-semibold text-slate-700 mb-4">
-              Vehicles Entered Today
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-slate-500">
-                <thead className="text-xs text-slate-700 uppercase bg-slate-100">
-                  <tr>
-                    <th scope="col" className="px-6 py-3">
-                      Owner Name
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Type
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Vehicle No.
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Model
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Entry Time
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Status
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {todayVehicles.map((v) => (
-                    <tr
-                      key={v.id}
-                      className="bg-white border-b hover:bg-slate-50"
-                    >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.ownerName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap capitalize">
-                        {v.ownerType || "N/A"}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.vehicleNumber}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.vehicleModel || "N/A"}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {new Date(v.entryTime).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            v.status === "Inside"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-red-100 text-red-800"
-                          }`}
-                        >
-                          {v.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
+      case "dashboard":
+        return renderDashboard();
+      case "vehicles":
+        return renderVehicles();
+      case "slots":
+        return renderSlots();
+      case "payments":
+        return renderPayments();
+      case "logs":
+        return renderLogs();
+      case "entry":
+        return renderEntry();
+      case "exit":
+        return renderExit();
+      case "people":
+        return renderPeople();
       default:
-        return (
-          <div className="bg-white p-6 rounded-lg shadow-sm">
-            <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-              <input
-                type="text"
-                placeholder="Search by Owner, Vehicle No., or Model"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full md:w-1/3 px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-              />
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <label className="text-sm font-medium text-slate-600 whitespace-nowrap">
-                  Status:
-                </label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
-                  className="w-full md:w-auto px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value="All">All</option>
-                  <option value="Inside">Inside</option>
-                  <option value="Exited">Exited</option>
-                </select>
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left text-slate-500">
-                <thead className="text-xs text-slate-700 uppercase bg-slate-100">
-                  <tr>
-                    <th scope="col" className="px-6 py-3">
-                      Owner Name
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Type
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Vehicle No.
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Model
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Entry Time
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Exit Time
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Status
-                    </th>
-                    <th scope="col" className="px-6 py-3">
-                      Action
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredVehicles.map((v) => (
-                    <tr
-                      key={v.id}
-                      className="bg-white border-b hover:bg-slate-50"
-                    >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.ownerName}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap capitalize">
-                        {v.ownerType || "N/A"}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.vehicleNumber}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.vehicleModel || "N/A"}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {new Date(v.entryTime).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.exitTime
-                          ? new Date(v.exitTime).toLocaleString()
-                          : "N/A"}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            v.status === "Inside"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-red-100 text-red-800"
-                          }`}
-                        >
-                          {v.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {v.status === "Inside" && (
-                          <button
-                            onClick={() => handleMarkExit(v.id)}
-                            className="font-medium text-indigo-600 hover:underline"
-                          >
-                            Mark Exit
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
+        return renderDashboard();
     }
   };
 
@@ -659,13 +1107,459 @@ const AdminDashboard: React.FC = () => {
         Navigation
       </h2>
       <ul className="space-y-2 font-medium">
-        <NavLink sectionName="vehicles">Vehicle Details</NavLink>
-        <NavLink sectionName="add">Add Vehicle</NavLink>
-        <NavLink sectionName="remove">Remove Vehicle</NavLink>
-        <NavLink sectionName="today">Entered Today</NavLink>
+        <NavLink sectionName="dashboard">Dashboard</NavLink>
+        <NavLink sectionName="vehicles">Vehicles</NavLink>
+        <NavLink sectionName="slots">Parking Slots</NavLink>
+        <NavLink sectionName="payments">Payments</NavLink>
+        <NavLink sectionName="logs">Parking Logs</NavLink>
+        <NavLink sectionName="entry">Vehicle Entry</NavLink>
+        <NavLink sectionName="exit">Vehicle Exit</NavLink>
+        <NavLink sectionName="people">People</NavLink>
       </ul>
     </>
   );
+
+  // Modals
+  const renderModal = () => {
+    if (!showAddModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center px-4">
+        <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-center border-b pb-3 mb-4">
+            <h3 className="text-xl font-bold text-[#003366]">
+              {modalType === "vehicle" && "Add Vehicle"}
+              {modalType === "slot" && "Add Parking Slot"}
+              {modalType === "payment" && "Add Payment"}
+            </h3>
+            <button
+              onClick={() => setShowAddModal(false)}
+              className="p-2 rounded-full hover:bg-slate-200"
+            >
+              <CloseIcon />
+            </button>
+          </div>
+
+          {modalType === "vehicle" && (
+            <form onSubmit={handleAddVehicle} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Number Plate *
+                </label>
+                <input
+                  type="text"
+                  value={vehicleForm.number_plate}
+                  onChange={(e) =>
+                    setVehicleForm({
+                      ...vehicleForm,
+                      number_plate: e.target.value.toUpperCase(),
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Vehicle Type *
+                </label>
+                <select
+                  value={vehicleForm.vehicle_type}
+                  onChange={(e) =>
+                    setVehicleForm({
+                      ...vehicleForm,
+                      vehicle_type: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                >
+                  <option value="car">Car</option>
+                  <option value="bike">Bike</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Owner Type *
+                </label>
+                <select
+                  value={vehicleForm.owner_type}
+                  onChange={(e) =>
+                    setVehicleForm({
+                      ...vehicleForm,
+                      owner_type: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                >
+                  <option value="student">Student</option>
+                  <option value="faculty">Faculty</option>
+                  <option value="visitor">Visitor</option>
+                </select>
+              </div>
+
+              {/* Common Fields */}
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Name *
+                </label>
+                <input
+                  type="text"
+                  value={vehicleForm.name}
+                  onChange={(e) =>
+                    setVehicleForm({ ...vehicleForm, name: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Phone Number *
+                </label>
+                <input
+                  type="tel"
+                  value={vehicleForm.phone}
+                  onChange={(e) =>
+                    setVehicleForm({ ...vehicleForm, phone: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                />
+              </div>
+
+              {/* Student-specific Fields */}
+              {vehicleForm.owner_type === "student" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Register Number *
+                    </label>
+                    <input
+                      type="number"
+                      value={vehicleForm.register_number}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          register_number: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Email *
+                    </label>
+                    <input
+                      type="email"
+                      value={vehicleForm.email}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          email: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Department *
+                    </label>
+                    <input
+                      type="text"
+                      value={vehicleForm.department}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          department: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      License Number *
+                    </label>
+                    <input
+                      type="text"
+                      value={vehicleForm.license_number}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          license_number: e.target.value.toUpperCase(),
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Faculty-specific Fields */}
+              {vehicleForm.owner_type === "faculty" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Faculty ID *
+                    </label>
+                    <input
+                      type="number"
+                      value={vehicleForm.faculty_id}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          faculty_id: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Email *
+                    </label>
+                    <input
+                      type="email"
+                      value={vehicleForm.email}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          email: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Department *
+                    </label>
+                    <input
+                      type="text"
+                      value={vehicleForm.department}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          department: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      License Number *
+                    </label>
+                    <input
+                      type="text"
+                      value={vehicleForm.license_number}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          license_number: e.target.value.toUpperCase(),
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Visitor-specific Fields */}
+              {vehicleForm.owner_type === "visitor" && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Purpose of Visit *
+                    </label>
+                    <input
+                      type="text"
+                      value={vehicleForm.purpose}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          purpose: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      ID Proof Type *
+                    </label>
+                    <select
+                      value={vehicleForm.id_proof}
+                      onChange={(e) =>
+                        setVehicleForm({
+                          ...vehicleForm,
+                          id_proof: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                      required
+                    >
+                      <option value="">Select ID Proof</option>
+                      <option value="Aadhaar">Aadhaar</option>
+                      <option value="Driving License">Driving License</option>
+                      <option value="PAN Card">PAN Card</option>
+                      <option value="Voter ID">Voter ID</option>
+                      <option value="Passport">Passport</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              <button
+                type="submit"
+                className="w-full bg-[#0A4C87] text-white py-2.5 rounded-md hover:bg-[#083a5e]"
+              >
+                Add Vehicle
+              </button>
+            </form>
+          )}
+
+          {modalType === "slot" && (
+            <form onSubmit={handleAddSlot} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Slot Name *
+                </label>
+                <input
+                  type="text"
+                  value={slotForm.slot_name}
+                  onChange={(e) =>
+                    setSlotForm({ ...slotForm, slot_name: e.target.value })
+                  }
+                  placeholder="e.g., A-01"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Slot Type
+                </label>
+                <select
+                  value={slotForm.slot_type}
+                  onChange={(e) =>
+                    setSlotForm({ ...slotForm, slot_type: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                >
+                  <option value="PAID">PAID (Student/Faculty)</option>
+                  <option value="VISITOR">VISITOR</option>
+                </select>
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-[#0A4C87] text-white py-2.5 rounded-md hover:bg-[#083a5e]"
+              >
+                Add Slot
+              </button>
+            </form>
+          )}
+
+          {modalType === "payment" && (
+            <form onSubmit={handleAddPayment} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Select Vehicle *
+                </label>
+                <select
+                  value={paymentForm.vehicle_id}
+                  onChange={(e) =>
+                    setPaymentForm({
+                      ...paymentForm,
+                      vehicle_id: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                >
+                  <option value="">Select vehicle</option>
+                  {vehicles
+                    .filter(
+                      (v) => v.owner_type !== "visitor" && !v.parking_payment
+                    )
+                    .map((v) => (
+                      <option key={v.vehicle_id} value={v.vehicle_id}>
+                        {v.number_plate} ({v.owner_type})
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  value={paymentForm.amount}
+                  onChange={(e) =>
+                    setPaymentForm({ ...paymentForm, amount: e.target.value })
+                  }
+                  placeholder="e.g., 5000"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Start Date *
+                </label>
+                <input
+                  type="date"
+                  value={paymentForm.start_date}
+                  onChange={(e) =>
+                    setPaymentForm({
+                      ...paymentForm,
+                      start_date: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  End Date *
+                </label>
+                <input
+                  type="date"
+                  value={paymentForm.end_date}
+                  onChange={(e) =>
+                    setPaymentForm({ ...paymentForm, end_date: e.target.value })
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md"
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full bg-[#0A4C87] text-white py-2.5 rounded-md hover:bg-[#083a5e]"
+              >
+                Create Payment
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-50/50 font-sans">
@@ -714,22 +1608,10 @@ const AdminDashboard: React.FC = () => {
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
               <button
-                onClick={openCamModal}
+                onClick={handleRefresh}
                 className="text-sm font-medium text-slate-600 hover:text-indigo-600"
               >
-                Live Cam
-              </button>
-              <button
-                onClick={handleRefresh}
-                className="text-sm font-medium text-slate-600 hover:text-indigo-600 hidden sm:block"
-              >
-                Export
-              </button>
-              <button
-                onClick={handleRefresh}
-                className="text-sm font-medium text-slate-600 hover:text-indigo-600 hidden sm:block"
-              >
-                Sync
+                Refresh
               </button>
               <div className="text-right hidden xs:block">
                 <div className="text-sm font-medium text-slate-800">Admin</div>
@@ -742,21 +1624,18 @@ const AdminDashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content Area with Sidebar */}
+      {/* Main Content */}
       <div className="flex">
-        {/* Mobile Sidebar Drawer */}
+        {/* Mobile Sidebar */}
         {mobileOpen && (
           <div className="fixed inset-0 z-50 md:hidden">
             <div
               className="fixed inset-0 bg-black/20 backdrop-blur-sm"
               onClick={() => setMobileOpen(false)}
             />
-            <aside className="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl p-4 z-50 transform transition-transform duration-300">
+            <aside className="fixed inset-y-0 left-0 w-64 bg-white shadow-2xl p-4 z-50">
               <div className="flex justify-between items-center mb-6 border-b pb-4">
-                <div className="flex items-center gap-2">
-                  <img src={christLogo} className="h-6 w-auto" alt="Logo" />
-                  <span className="font-semibold text-slate-700">Menu</span>
-                </div>
+                <span className="font-semibold text-slate-700">Menu</span>
                 <button
                   onClick={() => setMobileOpen(false)}
                   className="p-1 rounded-full hover:bg-slate-100"
@@ -776,422 +1655,28 @@ const AdminDashboard: React.FC = () => {
 
         {/* Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 w-full">
-          {/* KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-6">
-            <div className="bg-white p-6 rounded-lg shadow-sm cursor-pointer transition-transform duration-300 hover:scale-105 hover:shadow-lg">
-              <h4 className="text-sm font-medium text-slate-500 uppercase">
-                Total Slots
-              </h4>
-              <p className="mt-1 text-3xl font-semibold text-slate-800">
-                {totalSlots}
-              </p>
-            </div>
-            <div className="bg-white p-6 rounded-lg shadow-sm cursor-pointer transition-transform duration-300 hover:scale-105 hover:shadow-lg">
-              <h4 className="text-sm font-medium text-slate-500 uppercase">
-                Occupied Slots
-              </h4>
-              <p className="mt-1 text-3xl font-semibold text-slate-800">
-                {occupiedSlots}
-              </p>
-            </div>
-            <div className="bg-white p-6 rounded-lg shadow-sm cursor-pointer transition-transform duration-300 hover:scale-105 hover:shadow-lg">
-              <h4 className="text-sm font-medium text-slate-500 uppercase">
-                Available Slots
-              </h4>
-              <p className="mt-1 text-3xl font-semibold text-green-600">
-                {availableSlots}
-              </p>
-            </div>
-            <div className="bg-white p-6 rounded-lg shadow-sm cursor-pointer transition-transform duration-300 hover:scale-105 hover:shadow-lg">
-              <h4 className="text-sm font-medium text-slate-500 uppercase">
-                Entries Today
-              </h4>
-              <p className="mt-1 text-3xl font-semibold text-slate-800">
-                {entriesToday}
-              </p>
-            </div>
-          </div>
-
-          {/* Dynamic Section */}
           {renderSection()}
         </main>
       </div>
 
-      {/* Add Vehicle Modal (Multi-step) */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center px-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            {/* Modal Header */}
-            <div className="flex justify-between items-center border-b pb-3 mb-4">
-              <h3 className="text-xl font-bold text-[#003366]">
-                {formStep === 1
-                  ? "Step 1: Owner Details"
-                  : "Step 2: Specific & Vehicle Details"}
-              </h3>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="p-2 rounded-full hover:bg-slate-200 transition-colors"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6 text-slate-600"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
+      {/* Modals */}
+      {renderModal()}
 
-            {/* Progress Bar */}
-            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-6">
-              <div
-                className="bg-[#0A4C87] h-2.5 rounded-full transition-all duration-300 ease-in-out"
-                style={{ width: formStep === 1 ? "50%" : "100%" }}
-              ></div>
-            </div>
-
-            <form onSubmit={handleAddVehicle} className="space-y-4">
-              {/* Step 1: Owner Details */}
-              {formStep === 1 && (
-                <div className="bg-slate-50 p-4 rounded-lg animate-fadeIn">
-                  <h4 className="text-sm font-semibold text-[#003366] mb-3">
-                    Owner Information
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Owner Name *
-                      </label>
-                      <input
-                        type="text"
-                        name="ownerName"
-                        value={formData.ownerName}
-                        onChange={handleInputChange}
-                        placeholder="Enter full name"
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Email Address *
-                      </label>
-                      <input
-                        type="email"
-                        name="ownerEmail"
-                        value={formData.ownerEmail}
-                        onChange={handleInputChange}
-                        placeholder="Enter email"
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Phone Number *
-                      </label>
-                      <input
-                        type="tel"
-                        name="ownerPhone"
-                        value={formData.ownerPhone}
-                        onChange={handleInputChange}
-                        placeholder="Enter phone number"
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                      />
-                    </div>
-                    <div className="md:col-span-2">
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Owner Type *
-                      </label>
-                      <select
-                        name="ownerType"
-                        value={formData.ownerType}
-                        onChange={handleInputChange}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                      >
-                        <option value="" disabled>
-                          Select Type
-                        </option>
-                        <option value="student">Student</option>
-                        <option value="faculty">Faculty</option>
-                        <option value="visitor">Visitor</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Step 2: Specific & Vehicle Details */}
-              {formStep === 2 && (
-                <div className="space-y-4 animate-fadeIn">
-                  {/* Dynamic Section based on Owner Type */}
-                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-                    <h4 className="text-sm font-semibold text-[#003366] mb-3 capitalize">
-                      {formData.ownerType} Details
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {formData.ownerType === "student" && (
-                        <>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                              Register Number *
-                            </label>
-                            <input
-                              type="text"
-                              name="registerNumber"
-                              value={formData.registerNumber}
-                              onChange={handleInputChange}
-                              placeholder="e.g., 2347115"
-                              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                              License Number *
-                            </label>
-                            <input
-                              type="text"
-                              name="licenseNumber"
-                              value={formData.licenseNumber}
-                              onChange={handleInputChange}
-                              placeholder="Enter license number"
-                              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                              Department/Class *
-                            </label>
-                            <input
-                              type="text"
-                              name="department"
-                              value={formData.department}
-                              onChange={handleInputChange}
-                              placeholder="e.g., MCA"
-                              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                            />
-                          </div>
-                        </>
-                      )}
-
-                      {formData.ownerType === "faculty" && (
-                        <>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                              Employee ID *
-                            </label>
-                            <input
-                              type="text"
-                              name="employeeId"
-                              value={formData.employeeId}
-                              onChange={handleInputChange}
-                              placeholder="e.g., EMP101"
-                              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                              License Number *
-                            </label>
-                            <input
-                              type="text"
-                              name="licenseNumber"
-                              value={formData.licenseNumber}
-                              onChange={handleInputChange}
-                              placeholder="Enter license number"
-                              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">
-                              Department *
-                            </label>
-                            <input
-                              type="text"
-                              name="department"
-                              value={formData.department}
-                              onChange={handleInputChange}
-                              placeholder="e.g., Computer Science"
-                              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                            />
-                          </div>
-                        </>
-                      )}
-
-                      {formData.ownerType === "visitor" && (
-                        <div className="md:col-span-2">
-                          <label className="block text-sm font-medium text-slate-700 mb-1">
-                            Purpose of Visit *
-                          </label>
-                          <input
-                            type="text"
-                            name="purpose"
-                            value={formData.purpose}
-                            onChange={handleInputChange}
-                            placeholder="e.g., Meeting with Principal"
-                            className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Common Vehicle Details Section */}
-                  <div className="bg-slate-50 p-4 rounded-lg">
-                    <h4 className="text-sm font-semibold text-[#003366] mb-3">
-                      Vehicle Information
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">
-                          Vehicle Number *
-                        </label>
-                        <input
-                          type="text"
-                          name="vehicleNumber"
-                          value={formData.vehicleNumber}
-                          onChange={handleInputChange}
-                          placeholder="e.g., KA01AB1234"
-                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">
-                          Vehicle Model *
-                        </label>
-                        <input
-                          type="text"
-                          name="vehicleModel"
-                          value={formData.vehicleModel}
-                          onChange={handleInputChange}
-                          placeholder="e.g., Honda City"
-                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">
-                          Vehicle Color *
-                        </label>
-                        <input
-                          type="text"
-                          name="vehicleColor"
-                          value={formData.vehicleColor}
-                          onChange={handleInputChange}
-                          placeholder="e.g., Silver"
-                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">
-                          Vehicle Type *
-                        </label>
-                        <select
-                          name="vehicleType"
-                          value={formData.vehicleType}
-                          onChange={handleInputChange}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#0A4C87] focus:border-transparent"
-                        >
-                          <option value="Car">Car</option>
-                          <option value="Bike">Bike</option>
-                          <option value="Scooter">Scooter</option>
-                          <option value="SUV">SUV</option>
-                          <option value="Van">Van</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Navigation Buttons */}
-              <div className="flex gap-3 pt-4">
-                {formStep === 1 ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddModal(false)}
-                      className="flex-1 bg-slate-200 text-slate-700 py-2.5 px-4 rounded-lg font-semibold hover:bg-slate-300 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleNextStep}
-                      className="flex-1 bg-[#0A4C87] text-white py-2.5 px-4 rounded-lg font-semibold hover:bg-[#083a5e] transition-colors"
-                    >
-                      Next
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handlePrevStep}
-                      className="flex-1 bg-slate-200 text-slate-700 py-2.5 px-4 rounded-lg font-semibold hover:bg-slate-300 transition-colors"
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 bg-[#0A4C87] text-white py-2.5 px-4 rounded-lg font-semibold hover:bg-[#083a5e] transition-colors"
-                    >
-                      Register Vehicle
-                    </button>
-                  </>
-                )}
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Live Cam Modal */}
-      {camOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center">
-          <div className="bg-white rounded-lg shadow-xl p-4 w-full max-w-2xl">
-            <div className="flex justify-between items-center border-b pb-2 mb-4">
-              <h3 className="text-lg font-semibold text-slate-700">
-                Live Camera Feed
-              </h3>
-              <button
-                onClick={closeCamModal}
-                className="p-2 rounded-full hover:bg-slate-200"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6 text-slate-600"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div className="bg-black aspect-video flex items-center justify-center">
-              <p className="text-white">Live feed placeholder</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Snackbar Component */}
+      {/* Snackbar */}
       <Snackbar
         open={snackbarOpen}
         autoHideDuration={5000}
         onClose={handleCloseSnackbar}
         message={snackbarMessage}
-        action={snackbarAction}
+        action={
+          <IconButton
+            size="small"
+            color="inherit"
+            onClick={handleCloseSnackbar}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        }
       />
     </div>
   );

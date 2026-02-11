@@ -14,11 +14,11 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Get faculty by register number
-router.get("/:registerNumber", async (req, res) => {
+// Get faculty by faculty_id
+router.get("/:facultyId", async (req, res) => {
   try {
     const faculty = await prisma.faculty.findUnique({
-      where: { Register_Number: parseInt(req.params.registerNumber) },
+      where: { faculty_id: parseInt(req.params.facultyId) },
     });
     res.json(faculty);
   } catch (error) {
@@ -28,26 +28,18 @@ router.get("/:registerNumber", async (req, res) => {
 
 // Add new faculty
 router.post("/", async (req, res) => {
-  const {
-    Register_Number,
-    Name,
-    Email,
-    Phone_Number,
-    Department,
-    License_Number,
-    Category_,
-  } = req.body;
+  const { faculty_id, name, email, phone, department, license_number } =
+    req.body;
 
   try {
     const faculty = await prisma.faculty.create({
       data: {
-        Register_Number: parseInt(Register_Number),
-        Name,
-        Email,
-        Phone_Number,
-        Department,
-        License_Number,
-        Category_,
+        faculty_id: parseInt(faculty_id),
+        name,
+        email,
+        phone,
+        department,
+        license_number,
       },
     });
     res.json({ message: "Faculty added successfully", faculty });
@@ -57,20 +49,18 @@ router.post("/", async (req, res) => {
 });
 
 // Update faculty
-router.put("/:registerNumber", async (req, res) => {
-  const { Name, Email, Phone_Number, Department, License_Number, Category_ } =
-    req.body;
+router.put("/:facultyId", async (req, res) => {
+  const { name, email, phone, department, license_number } = req.body;
 
   try {
     const faculty = await prisma.faculty.update({
-      where: { Register_Number: parseInt(req.params.registerNumber) },
+      where: { faculty_id: parseInt(req.params.facultyId) },
       data: {
-        Name,
-        Email,
-        Phone_Number,
-        Department,
-        License_Number,
-        Category_,
+        name,
+        email,
+        phone,
+        department,
+        license_number,
       },
     });
     res.json({ message: "Faculty updated successfully", faculty });
@@ -80,10 +70,10 @@ router.put("/:registerNumber", async (req, res) => {
 });
 
 // Delete faculty
-router.delete("/:registerNumber", async (req, res) => {
+router.delete("/:facultyId", async (req, res) => {
   try {
     await prisma.faculty.delete({
-      where: { Register_Number: parseInt(req.params.registerNumber) },
+      where: { faculty_id: parseInt(req.params.facultyId) },
     });
     res.json({ message: "Faculty deleted successfully" });
   } catch (error) {

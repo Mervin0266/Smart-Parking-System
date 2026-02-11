@@ -7,30 +7,90 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Faculty {
-  Register_Number Int     @id @map("Register Number")
-  Name            String  @db.VarChar(50)
-  Email           String  @db.VarChar(100)
-  Phone_Number    String  @map("Phone Number") @db.VarChar(20)
-  Department      String? @db.VarChar(100)
-  License_Number  String? @map("License Number") @db.VarChar(30)
-  Category_       String? @map("Category ") @db.VarChar(15)
-}
-
-model Visitor {
-  Name         String  @db.VarChar(50)
-  Phone_Number String  @db.VarChar(20)
-  Email        String? @db.VarChar(100)
-  Purpose      String? @db.VarChar(255)
-
-  @@id([Phone_Number, Name])
-}
-
 model student {
-  Register_Number Int     @id @map("Register Number")
-  Name            String  @db.VarChar(50)
-  Email           String? @db.VarChar(255)
-  Phone_Number    String? @map("Phone Number") @db.VarChar(20)
-  Department      String? @db.VarChar(100)
-  License_Number  String? @map("License Number") @db.VarChar(25)
+  register_number Int     @id
+  name            String? @db.VarChar(100)
+  email           String? @db.VarChar(100)
+  phone           String? @db.VarChar(20)
+  department      String? @db.VarChar(100)
+  license_number  String? @db.VarChar(30)
+}
+
+model faculty {
+  faculty_id     Int     @id
+  name           String? @db.VarChar(100)
+  email          String? @db.VarChar(100)
+  phone          String? @db.VarChar(20)
+  department     String? @db.VarChar(100)
+  license_number String? @db.VarChar(30)
+}
+
+model parking_log {
+  log_id       Int           @id @default(autoincrement())
+  vehicle_id   Int?
+  slot_id      Int?
+  entry_time   DateTime?     @default(now()) @db.Timestamp(6)
+  exit_time    DateTime?     @db.Timestamp(6)
+  notes        String?
+  parking_slot parking_slot? @relation(fields: [slot_id], references: [slot_id], onDelete: NoAction, onUpdate: NoAction)
+  vehicle      vehicle?      @relation(fields: [vehicle_id], references: [vehicle_id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model parking_payment {
+  payment_id Int       @id @default(autoincrement())
+  vehicle_id Int?      @unique
+  amount     Decimal?  @db.Decimal(10, 2)
+  start_date DateTime? @db.Date
+  end_date   DateTime? @db.Date
+  status     String    @db.VarChar(20)
+  vehicle    vehicle?  @relation(fields: [vehicle_id], references: [vehicle_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model parking_slot {
+  slot_id         Int              @id @default(autoincrement())
+  slot_name       String           @unique @db.VarChar(20)
+  slot_type       String           @db.VarChar(20)
+  is_occupied     Boolean?         @default(false)
+  parking_log     parking_log[]
+  slot_assignment slot_assignment?
+}
+
+model slot_assignment {
+  assignment_id Int           @id @default(autoincrement())
+  vehicle_id    Int?          @unique
+  slot_id       Int?          @unique
+  parking_slot  parking_slot? @relation(fields: [slot_id], references: [slot_id], onDelete: Cascade, onUpdate: NoAction)
+  vehicle       vehicle?      @relation(fields: [vehicle_id], references: [vehicle_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model users {
+  user_id        Int     @id @default(autoincrement())
+  username       String  @unique @db.VarChar(50)
+  password_hash  String
+  role           String  @db.VarChar(20)
+  license_number String? @db.VarChar(30)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model vehicle {
+  vehicle_id      Int              @id @default(autoincrement())
+  number_plate    String           @unique @db.VarChar(20)
+  vehicle_type    String           @db.VarChar(10)
+  owner_type      String           @db.VarChar(10)
+  owner_id        Int?
+  parking_log     parking_log[]
+  parking_payment parking_payment?
+  slot_assignment slot_assignment?
+}
+
+model visitor {
+  name           String    @db.VarChar(100)
+  phone          String    @db.VarChar(20)
+  purpose        String?
+  vehicle_number String    @unique @db.VarChar(20)
+  id_proof       String?   @db.VarChar(100)
+  created_at     DateTime? @default(now()) @db.Timestamp(6)
 }
