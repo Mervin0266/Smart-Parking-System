@@ -130,8 +130,11 @@ const VehicleDashboard = () => {
               <table className="w-full border-collapse rounded-xl overflow-hidden shadow-md text-sm">
                 <thead>
                   <tr className="bg-[#eaf2ff] text-[#003366]">
+                    <th className="px-3 py-2 text-left">Owner Name</th>
+                    <th className="px-3 py-2 text-left">Phone</th>
                     <th className="px-3 py-2 text-left">Plate</th>
                     <th className="px-3 py-2 text-left">Model</th>
+                    <th className="px-3 py-2 text-left">Color</th>
                     <th className="px-3 py-2 text-left">Type</th>
                     <th className="px-3 py-2 text-left">Entry Time</th>
                     <th className="px-3 py-2 text-left">Status</th>
@@ -143,8 +146,11 @@ const VehicleDashboard = () => {
                       key={v.plate + v.entry + idx}
                       className="odd:bg-white even:bg-[#f9fbff]"
                     >
+                      <td className="px-3 py-2">{v.ownerName}</td>
+                      <td className="px-3 py-2">{v.ownerPhone}</td>
                       <td className="px-3 py-2">{v.plate}</td>
                       <td className="px-3 py-2">{v.model}</td>
+                      <td className="px-3 py-2">{v.color}</td>
                       <td className="px-3 py-2">{v.type}</td>
                       <td className="px-3 py-2">{v.entry}</td>
                       <td className="px-3 py-2">
